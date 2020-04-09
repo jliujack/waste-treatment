@@ -4,34 +4,48 @@ from bs4 import BeautifulSoup
 import xlwt
 import re
 
-kw = ['垃圾分类', '垃圾处理']
+kw = ['垃圾']
 city = {
-    '北京市': '11',
-    '上海市': '31',
-    '深圳': '4403',
-    '广东': '44 not 4403'
+    '全部': '',
+    # '北京市': '11',
+    # '上海市': '31',
+    # '深圳': '4403',
+    # '广东': '44 not 4403'
 }
 
+proxies = {
+    'http': '117.88.177.28:3000',
+    'https': '117.88.177.28:3000'
+}
+
+header = {'User-Agent':'Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/69.0.3497.100 Safari/537.36'}
+
 # 获取Url地址列表
-def getUrlList(params, area):
-    url = 'http://search.ccgp.gov.cn/bxsearch?searchtype=1&bidSort=0&buyerName=&projectId=&pinMu=0&bidType=7&dbselect=bidx&start_time=2019%3A04%3A07&end_time=2020%3A04%3A07&timeType=6&displayZone=%E5%8C%97%E4%BA%AC%E5%B8%82&pppStatus=0&agentName='
+def getUrlList(params):
+    url = 'http://search.ccgp.gov.cn/bxsearch?searchtype=1&bidSort=0&buyerName=&projectId=&pinMu=0&bidType=7&dbselect=bidx&start_time=2018%3A04%3A09&end_time=2019%3A04%3A08&timeType=6&displayZone=%E5%8C%97%E4%BA%AC%E5%B8%82&pppStatus=0&agentName='
     query = urlencode(params)
-    res = requests.get(url+'&'+query)
+    res = requests.get(url+'&'+query, headers = header,  timeout=5)
     soup = BeautifulSoup(res.text, 'lxml')
-    data = soup.select('.vT-srch-result-list-bid>li> a')
+    data = soup.select('.vT-srch-result-list-bid>li')
     total = soup.select('body > div:nth-child(9) > div:nth-child(1) > div > p:nth-child(1) > span:nth-child(2)')[0].get_text()
     total = int(total)
     while params['page_index'] * 20 < total:
         params['page_index'] += 1
         query = urlencode(params)
-        res = requests.get(url + '&' + query)
+        res = requests.get(url + '&' + query, headers = header,  timeout=5)
         soup = BeautifulSoup(res.text, 'lxml')
-        data.extend(soup.select('.vT-srch-result-list-bid>li> a'))
+        data.extend(soup.select('.vT-srch-result-list-bid>li'))
     ret = []
     for item in data:
+        a = item.a
+        area = item.find_all('a')
+        if len(area) == 2:
+            area = area[1].get_text().strip()
+        else:
+            area = '未获取到'
         result = {
-            'title': item.get_text().strip(),
-            'link': item.get('href'),
+            'title': a.get_text().strip(),
+            'link': a.get('href'),
             'bid-area': area,
             'bid-kw': params['kw'],
             'bid-name': '',
@@ -47,12 +61,12 @@ def getUrlList(params, area):
 def detail(obj):
     try:
         headers = {'User-Agent':'Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.1 (KHTML, like Gecko) Chrome/21.0.1180.71 Safari/537.1 LBBROWSER'}
-        res = requests.get(obj['link'], headers=headers)
+        res = requests.get(obj['link'], headers = headers,  timeout=5)
         res.encoding = 'utf-8'
         soup = BeautifulSoup(res.text, 'lxml')
         purchase_node = soup.find(class_="title", string="采购单位")
-        obj['purchaser'] = purchase_node.next_sibling.string
-
+        if purchase_node:
+            obj['purchaser'] = purchase_node.next_sibling.string
         purchase_node = soup.find_all(string=re.compile("供应商名称："))
         if not purchase_node:
             purchase_node = soup.find_all(string=re.compile("中标单位："))
@@ -98,7 +112,8 @@ def detail(obj):
 
         print('采购单位：' + obj['purchaser'] + '\t中标成交供应商名称：' + obj['bid-winner'] +'\t中标日期：' + obj['bid-date'] +'\t中标金额：' + obj['bid-amount'] +'\t项目名称：' + obj['bid-name'])
     except:
-        preint('error happened!!!!!!')
+        print('error happened!!!!!!')
+        pass
 #中标信息写入excel文件
 def writeExcel(excelPath,objs):
     workbook = xlwt.Workbook()
@@ -120,6 +135,25 @@ def writeExcel(excelPath,objs):
         sheet.write(i + 1, 8, obj['bid-kw'])
     workbook.save(excelPath)
 
+# 获得金额float类型
+def getAmount(str):
+    try:
+        index = 0
+        for i in range(0, len(str)):
+            if str[i] == '.':
+                index = i
+        return float(str[0: index+1])
+    except:
+        return 0
+
+# 过滤
+def filter(data):
+    res = []
+    for i in range(0, len(data)):
+        amount = getAmount(data[i]['bid-amount'])
+        if amount > 100 or amount == 0:
+            res.append(data[i])
+    return res
 # 主函数
 def main():
     data = []
@@ -131,12 +165,13 @@ def main():
                 'kw': search_text,
                 'zoneId': city[key],
             }
-            newdata = getUrlList(params, key)
+            newdata = getUrlList(params)
             for obj in newdata:
                 link = obj['link']
                 if (not link or not link.startswith('http')):
                     continue
                 detail(obj)
+            data = filter(data)
             data.extend((newdata))
     writeExcel('d:/waste-treatment.xlsx', data)
 
